@@ -1,53 +1,62 @@
-Project: iicu-layouts.
+# iicu-layouts
 
-A small Python CLI to back up, restore and copy Intervals.icu page layouts (UI settings) between
-device classes: desktop, tablet, phone.
+Python CLI to back up, restore and copy Intervals.icu page layouts (UI settings)
+between device classes desktop, tablet, phone. License: GPL-3.0-or-later.
 
-## Verified findings (from browser inspection, session-cookie auth)
-- Read: GET https://intervals.icu/api/athlete?deviceClass=<desktop|tablet|phone>
-  returns a big payload. The part we need is the `settings` object (~74 keys on desktop).
-  The payload also holds email and subscription data. NEVER store anything except `settings`.
-- Write: PUT https://intervals.icu/api/settings/<deviceClass> with a JSON body
-  {"<settingKey>": <full value>}. Only the sent keys are updated (per-key merge), and each
+## Verified API findings (browser inspection, session-cookie auth)
+- Read: GET https://intervals.icu/api/athlete?deviceClass=<desktop|tablet|phone> returns
+  a large payload. We need only its `settings` object (~74 keys on desktop). The payload
+  also contains email and subscription data. NEVER store anything except `settings`.
+- Write: PUT https://intervals.icu/api/settings/<deviceClass> with JSON body
+  {"<settingKey>": <full value>}. Only the sent keys are updated (per-key merge); each
   value replaces the old one as a whole. GET on that URL returns 405.
-- Unknown deviceClass values silently return the DESKTOP settings. The CLI must therefore
-  accept only desktop|tablet|phone and never pass anything else through.
-- Fitness page layout is settings["FitnessView.options"]: days, futureDays, activeTab,
+- Unknown deviceClass values silently return the DESKTOP settings. Accept only
+  desktop|tablet|phone and never pass anything else through.
+- Fitness page layout: settings["FitnessView.options"] with days, futureDays, activeTab,
   recentDateRanges, tabs[] (id, label, show* flags, showCustom = custom chart IDs).
-  Custom chart IDs are account-level, so a layout copied between classes should resolve.
-- Last writer wins. A stale open browser window rewrites its old FitnessView.options
-  on load or interaction and can silently undo our write.
+  Custom chart IDs are account-level, so layouts copied between classes should resolve.
+- Last writer wins. A stale open browser window rewrites its old FitnessView.options on
+  load or interaction and can silently undo our write.
 - Tablet and phone have their own, smaller key sets. Some keys exist only on desktop.
+- These are undocumented internal endpoints and may change without notice.
 
-## Step 0 (do this first, read-only, then stop and report to me)
-Check whether HTTP Basic auth with the Intervals.icu API key (username "API_KEY",
-password = key from env var ICU_API_KEY) is accepted by GET /api/athlete?deviceClass=tablet.
-Report status codes and the top-level key names of the response only. Do not print values.
-If the API key is rejected, do NOT build workarounds. Report back and we decide together
-how to authenticate (e.g. a session cookie that I supply via env var, never committed).
+## Credentials
+- Source: Python `keyring` only. Service "iicu-layouts", entries "api_key" and
+  "athlete_id" (already stored by the user; never ask for or handle the values).
+  Read them only via keyring.get_password() inside one loader function.
+- If the keyring backend is unavailable or returns nothing, stop with a clear error.
+  Never fall back to plaintext files, env vars, other credential files or a file-based
+  keyring backend. Do not add keyrings.alt. No alternative credential sources.
+- Never print, log, or read credentials outside the loader. Do not query the keychain
+  via shell commands.
+- Auth is HTTP Basic: username "API_KEY", password = the key.
+- Tests mock the loader. No real credentials in tests, fixtures or logs.
 
-## CLI (after step 0 passes), package `iicu_layouts`, command `iicu-layouts`
-- dump [--classes desktop,tablet,phone]: write snapshots/<class>/<UTC timestamp>.json
-  containing only `settings`. Also keep snapshots/<class>/latest.json.
-- list: show snapshots and, per class, the tab labels of FitnessView.options.
-- diff <a> <b>: compare two snapshots or live classes, per key (changed / only-in-one).
-- restore <snapshot-file> --to <class> [--keys FitnessView.options]
-- copy <from-class> <to-class> [--keys FitnessView.options] [--reset-active-tab]
-- Write commands are dry-run by default and show what would change. They write only with --apply.
-- Default --keys is FitnessView.options only. Writing other keys needs an explicit
-  --keys list, and ComparePage.options etc. get a warning.
-- Before every write: snapshot the target class first.
-- After every write: re-read the server and verify the values. Then re-check after
-  ~60 s (--watch for longer) and report loudly if a stale client reverted the change.
-- Tell the user before writing: close or reload other Intervals.icu windows on that class.
-- The first live write test must target `phone`, never desktop.
+## Write safety
+- Write commands are dry-run by default and write only with --apply.
+- Snapshot the target class before every write. Re-read and verify after every write,
+  re-check after ~60 s (--watch for longer) and report loudly if a stale client reverted it.
+- Default --keys is FitnessView.options only. Other keys need an explicit --keys list;
+  ComparePage.options etc. get a warning.
+- Before writing, tell the user to close or reload other Intervals.icu windows on that class.
+- The first live write test targets `phone`, never desktop.
 
-## Engineering constraints
-- Python 3.11+, requests (or httpx) and stdlib argparse, minimal dependencies. pytest.
-- Config via env vars (ICU_API_KEY, optionally ICU_BASE_URL); no secrets in the repo.
-- Create .gitignore first (config, .env, __pycache__, venv, snapshots/ is ignored by default
-  because tab names and chart IDs are personal). Ask me before committing any snapshot.
+## Engineering
+- Python 3.11+, requests (or httpx), stdlib argparse, keyring, pytest. Minimal dependencies.
+- .gitignore first: .env, __pycache__, venv, snapshots/ (tab names and chart IDs are
+  personal). Ask before committing any snapshot. Small commits; say what each does.
 - Unit tests use sanitized fixtures (fake chart IDs and labels), no live calls.
-- README: purpose, the findings above, auth, usage examples, a clear caveat that these are
-  undocumented internal endpoints that may change, and the stale-window warning.
-- Keep commits small and tell me what each does.
+
+## Documentation requirements (README must contain)
+- Purpose, the API findings above, and the caveat about undocumented endpoints.
+- Credentials setup, step by step:
+  `python -m keyring set iicu-layouts api_key` and
+  `python -m keyring set iicu-layouts athlete_id` (values are prompted, nothing lands
+  in shell history); the service/entry names; how to verify the entries exist without
+  printing them; how to rotate or delete them.
+- Platform notes: macOS Keychain shows a permission prompt on first read, "Always Allow"
+  applies per Python binary, so a new venv may prompt again, and it needs a GUI session
+  (not over SSH). Linux needs a running Secret Service (GNOME Keyring/KWallet); the tool
+  fails loudly otherwise. Windows uses Credential Locker.
+- Usage examples for every command, the dry-run/--apply model, and the stale-window warning.
+- A recommended-model note is fine (Sonnet 5.5, default effort), as documentation only.
